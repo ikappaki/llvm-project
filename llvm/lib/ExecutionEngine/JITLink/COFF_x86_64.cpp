@@ -320,6 +320,30 @@ Error synthesizeIATEntries_COFF_x86_64(LinkGraph &G) {
 
   return Error::success();
 }
+
+// A LinkGraph pass that resolves __ImageBase for COFF x86_64 graphs
+class COFFImageBaseResolution_x86_64 {
+public:
+  // Resolves __ImageBase to the lowest allocated section address in G
+  Error operator()(LinkGraph &G) {
+    GetImageBaseSymbol GetImageBase;
+
+    auto ImageBase = GetImageBase(G);
+    if (ImageBase) {
+      orc::ExecutorAddr Base(~uint64_t(0));
+      for (auto &Sec : G.sections()) {
+        if (Sec.empty())
+          continue;
+        SectionRange SR(Sec);
+        Base = std::min(Base, SR.getStart());
+      }
+      assert(ImageBase && "__ImageBase symbol must be defined");
+      ImageBase->getAddressable().setAddress(Base);
+    }
+    return Error::success();
+  }
+};
+
 } // namespace
 
 namespace llvm {
@@ -380,6 +404,9 @@ void link_COFF_x86_64(std::unique_ptr<LinkGraph> G,
     // builders for ELF/Mach-O. Runs in PostPrune (before external-symbol
     // lookup) so the X targets it introduces are resolved normally.
     Config.PostPrunePasses.push_back(synthesizeIATEntries_COFF_x86_64);
+
+    // Add ImageBase resolution pass, needed by Lowering and other downstream passes.
+    Config.PreFixupPasses.push_back(COFFImageBaseResolution_x86_64());
 
     // Add COFF edge lowering passes.
     Config.PreFixupPasses.push_back(COFFLinkGraphLowering_x86_64());
