@@ -344,6 +344,28 @@ public:
   }
 };
 
+// Create GOT entries and PLT stubs in G for calls to external
+// symbols. Returns Error::success() unconditionally.
+Error buildTables_COFF_x86_64(LinkGraph &G) {
+  LLVM_DEBUG(dbgs() << "Visiting edges in graph:\n");
+
+  x86_64::GOTTableManager GOT(G);
+  x86_64::PLTTableManager PLT(G, GOT);
+  // Mark calls to externals as BranchPCRel32 so PLTTableManager will create
+  // stubs for them. Without this, it ignores COFF's PCRel32 edge kind.
+  for (auto *B : G.blocks()) {
+    for (auto &E : B->edges()) {
+      if (E.getKind() == EdgeKind_coff_x86_64::PCRel32 &&
+          !E.getTarget().isDefined()) {
+        E.setKind(x86_64::BranchPCRel32);
+      }
+    }
+  }
+
+  visitExistingEdges(G, PLT);
+  return Error::success();
+}
+
 } // namespace
 
 namespace llvm {
@@ -404,6 +426,9 @@ void link_COFF_x86_64(std::unique_ptr<LinkGraph> G,
     // builders for ELF/Mach-O. Runs in PostPrune (before external-symbol
     // lookup) so the X targets it introduces are resolved normally.
     Config.PostPrunePasses.push_back(synthesizeIATEntries_COFF_x86_64);
+
+    // Add an in place GOT/PLT stub build pass for external calls.      
+    Config.PostPrunePasses.push_back(buildTables_COFF_x86_64);
 
     // Add ImageBase resolution pass, needed by Lowering and other downstream passes.
     Config.PreFixupPasses.push_back(COFFImageBaseResolution_x86_64());
